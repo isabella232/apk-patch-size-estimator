@@ -42,7 +42,7 @@ head_path = None
 tail_path = None
 bunzip2_path = None
 java_path = None
-
+dir_path = os.path.dirname(os.path.realpath(__file__))
 
 def find_bins_or_die():
   """Checks that all the binaries needed are available.
@@ -259,7 +259,7 @@ def calculate_filebyfile(old_file, new_file, save_patch_path, temp_path):
   # We use a jar from https://github.com/andrewhayden/archive-patcher
   if os.path.exists(filebyfile_patch_path): os.remove(filebyfile_patch_path)
   p = subprocess.Popen(
-      [java_path, '-jar', 'lib/file-by-file-tools.jar', '--generate',
+      [java_path, '-jar', dir_path + '/lib/file-by-file-tools.jar', '--generate',
        '--old', old_file, '--new', new_file, '--patch', filebyfile_patch_path],
       shell=False)
   ret_code = p.wait()
