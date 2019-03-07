@@ -35,7 +35,7 @@ File-By-File   6.54MB         2.12MB         2.12MB
 Please visit https://github.com/google/archive-patcher for further details.
 
 ## Installing external dependencies
-The script uses *bsdiff*, *gzip*, "brotli", *head*, *tail*, *bunzip2* and *java* binaries, [**bsdiff**](https://www.freebsd.org/cgi/man.cgi?query=bsdiff) and [**brotli**](https://github.com/google/brotli) are the only ones not installed by defult in a unix based OS.
+The script uses *bsdiff*, *gzip*, *brotli*, *head*, *tail*, *bunzip2* and *java* binaries, [**bsdiff**](https://www.freebsd.org/cgi/man.cgi?query=bsdiff) and [**brotli**](https://github.com/google/brotli) are the only ones not installed by defult in a unix based OS.
 
 #### Linux debian-based
 Install bsdiff:
