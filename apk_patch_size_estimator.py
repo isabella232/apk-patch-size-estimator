@@ -16,17 +16,15 @@
 
 """Estimates the size of Google Play patches and the new gzipped APK.
 
-From two APKs it estimates the size of new patches as well as
-the size of a gzipped version of the APK, which would be used in
-cases where patches are unexpectedly large, unavailable, or unsuitable.
-Google Play uses multiple techniques to generate patches and generally picks
-the best match for the device. The best match is usually, but not always, the
-smallest patch file produced. The numbers that this script produces are
-ESTIMATES that can be used to characterize the impact of arbitrary changes to
-APKs. There is NO GUARANTEE that this tool produces the same patches or patch
-sizes that Google Play generates, stores or transmits, and the actual
-implementation within Google Play may change at any time, without notice.
-
+From two APKs it estimates the size of new patches produced by combinations of
+delta and compression algorithms. Google Play uses multiple techniques to
+generate patches and generally picks the best match for the device. The best
+match is usually, but not always, the smallest patch file produced. The numbers
+that this script produces are ESTIMATES that can be used to characterize the
+impact of arbitrary changes to APKs. There is NO GUARANTEE that this tool
+produces the same patches or patch sizes that Google Play generates, stores or
+transmits, and the actual implementation within Google Play may change at any
+time, without notice.
 """
 
 import sys
@@ -42,7 +40,9 @@ head_path = None
 tail_path = None
 bunzip2_path = None
 java_path = None
+brotli_path = None
 dir_path = os.path.dirname(os.path.realpath(__file__))
+
 
 def find_bins_or_die():
   """Checks that all the binaries needed are available.
@@ -69,6 +69,9 @@ def find_bins_or_die():
   global java_path
   if not java_path:
     java_path = find_binary('java')
+  global brotli_path
+  if not brotli_path:
+    brotli_path = find_binary('brotli')
 
 
 def find_binary(binary_name):
@@ -81,6 +84,13 @@ def find_binary(binary_name):
         'No "' + binary_name + '" on PATH, please install or fix PATH.')
 
 
+def check_exists(*files):
+  """Checks if the file exists and die if not."""
+  for f in files:
+    if not os.path.exists(f):
+      raise Exception('File does not exist: %s' % f)
+
+
 def human_file_size(size):
   """Converts a byte size number into a human readable value."""
 
@@ -89,22 +99,42 @@ def human_file_size(size):
     return '0B'
   units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB']
   p = math.floor(math.log(size, 2) / 10)
-  return '%.3g%s' % (size/math.pow(1024, p), units[int(p)])
+  return '%.3g%s' % (size / math.pow(1024, p), units[int(p)])
 
 
-def calculate_bsdiff(old_file, new_file, save_patch_path, temp_path):
-  """Estimates the size the Bsdiff patch gzipped.
+def cleanup(*files):
+  """Remove files if exist."""
+  for f in files:
+    if os.path.exists(f):
+      os.remove(f)
+
+
+def run_command(command, **kwargs):
+  """Run a command and die if it fails.
+
+  Args:
+    kwargs: extra arguments to subprocess.Popen
+  """
+  p = subprocess.Popen(
+      command,
+      shell=False, **kwargs)
+  ret_code = p.wait()
+  if ret_code != 0:
+    raise Exception(
+        'Problem running "%s", returned code: %s' % (
+        " ".join(command), ret_code))
+
+
+def bsdiff(old_file, new_file, temp_path):
+  """Compute a BSDIFF patch, uncompressing the bzip2 part.
 
   Args:
     old_file: the old APK file
     new_file: the new APK file
-    save_patch_path: the path including filename to save the generated patch.
     temp_path: the directory to use for the process
 
   Returns:
-    a dictionary with:
-      'gzipped_new_file_size': the estimated size of the new gzipped APK
-      'bsdiff_patch_size': the estimated size of the patch from the two APKs
+    the path of the patch generated
 
   Raises:
     Exception: if there is a problem calling the binaries needed in the process
@@ -113,121 +143,54 @@ def calculate_bsdiff(old_file, new_file, save_patch_path, temp_path):
   # Oddities:
   # Bsdiff forces bzip2 compression, which starts after byte 32. Bzip2 isn't
   # necessarily the best choice in all cases, and isn't necessarily what Google
-  # Play uses, so it has to be uncompressed and rewritten with gzip.
-
-  # Checks that the OS binaries needed are available
-  find_bins_or_die()
-  # Clean temp files
-  if os.path.exists(temp_path): os.remove(temp_path)
-
-  # Create the bsdiff of the two APKs
-  subprocess.check_output(
-      [bsdiff_path, old_file, new_file, temp_path])
+  # Play uses, so it has to be uncompressed.
 
   # bsdiff paths
-  raw_bsdiff_path = temp_path + '.raw_bsdiff'
+  bsdiff_patch_path = os.path.join(temp_path, 'patch.bsdiff')
+  raw_bsdiff_path = os.path.join(temp_path, 'patch.raw_bsdiff')
   bzipped_bsdiff_path = raw_bsdiff_path + '.bz2'
-  gzipped_bsdiff_path = raw_bsdiff_path + '.gz'
-  bsdiff_header_path = temp_path + '.raw_bsdiff_header'
-  if os.path.exists(raw_bsdiff_path): os.remove(raw_bsdiff_path)
-  if os.path.exists(bzipped_bsdiff_path): os.remove(bzipped_bsdiff_path)
-  if os.path.exists(gzipped_bsdiff_path): os.remove(gzipped_bsdiff_path)
-  if os.path.exists(bsdiff_header_path): os.remove(bsdiff_header_path)
+  bsdiff_header_path = os.path.join(temp_path, 'patch.raw_bsdiff_header')
+  cleanup(raw_bsdiff_path, bzipped_bsdiff_path, bsdiff_header_path)
+
+  # Create the bsdiff of the two APKs
+  run_command(
+      [bsdiff_path, old_file, new_file, bsdiff_patch_path])
 
   # Strip the first 32 bytes the bsdiff file, which is a bsdiff-specific header.
   bsdiff_header = open(bsdiff_header_path, 'w')
-  p = subprocess.Popen(
-      [head_path, '-c', '32', bsdiff_header_path],
-      shell=False, stdout=bsdiff_header)
-  ret_code = p.wait()
-  if ret_code != 0:
-    raise Exception('Problem at the bsdiff step, returned code: %s' % ret_code)
+  run_command(
+      [head_path, '-c', '32', bsdiff_patch_path],
+      stdout=bsdiff_header)
   bsdiff_header.flush()
   bsdiff_header.close()
 
   # Take the remainder of the file to gain an uncompressed copy.
   bzipped_bsdiff_patch = open(bzipped_bsdiff_path, 'w')
-  p = subprocess.Popen(
-      [tail_path, '-c', '+33', temp_path],
-      shell=False, stdout=bzipped_bsdiff_patch)
-  ret_code = p.wait()
-  if ret_code != 0:
-    raise Exception('Problem at the tail step, returned code: %s' % ret_code)
+  run_command(
+      [tail_path, '-c', '+33', bsdiff_patch_path],
+      stdout=bzipped_bsdiff_patch)
   bzipped_bsdiff_patch.flush()
   bzipped_bsdiff_patch.close()
-  subprocess.check_output([bunzip2_path, '-d', '-q', bzipped_bsdiff_path])
+  run_command([bunzip2_path, '-d', '-q', bzipped_bsdiff_path])
 
   # Prepend the 32 bytes of bsdiff header back onto the uncompressed file.
-  if save_patch_path:
-    rebuilt_bsdiff_path = save_patch_path + '-bsdiff-patch'
-  else:
-    rebuilt_bsdiff_path = raw_bsdiff_path + '.rebuilt'
-  gzipped_rebuilt_bsdiff_path = rebuilt_bsdiff_path + '.gz'
+  rebuilt_bsdiff_path = raw_bsdiff_path + '.rebuilt'
   if os.path.exists(rebuilt_bsdiff_path): os.remove(rebuilt_bsdiff_path)
-  if os.path.exists(gzipped_rebuilt_bsdiff_path):
-    os.remove(gzipped_rebuilt_bsdiff_path)
   rebuilt_bsdiff = open(rebuilt_bsdiff_path, 'w')
-  p = subprocess.Popen(
+  run_command(
       ['cat', bsdiff_header_path, raw_bsdiff_path],
-      shell=False, stdout=rebuilt_bsdiff)
-  ret_code = p.wait()
-  if ret_code != 0:
-    raise Exception('Problem at the cat step, returned code: %s' % ret_code)
+      stdout=rebuilt_bsdiff)
   rebuilt_bsdiff.flush()
   rebuilt_bsdiff.close()
 
-  # gzip the patch and get its size.
-  subprocess.check_output([gzip_path, '-9', rebuilt_bsdiff_path])
-  bsdiff_patch_size = os.stat(gzipped_rebuilt_bsdiff_path).st_size
-
   # Clean up.
-  if os.path.exists(temp_path): os.remove(temp_path)
-  if os.path.exists(raw_bsdiff_path): os.remove(raw_bsdiff_path)
-  if os.path.exists(bsdiff_header_path): os.remove(bsdiff_header_path)
-  if os.path.exists(gzipped_bsdiff_path): os.remove(gzipped_bsdiff_path)
-  if not save_patch_path and os.path.exists(gzipped_rebuilt_bsdiff_path):
-    os.remove(gzipped_rebuilt_bsdiff_path)
+  cleanup(raw_bsdiff_path, bsdiff_header_path, bzipped_bsdiff_path)
 
-  return bsdiff_patch_size
+  return rebuilt_bsdiff_path
 
 
-def calculate_new_apk(new_file, temp_path):
-  """Estimates the size the new APK gzipped.
-
-  Args:
-    new_file: the new APK file
-    temp_path: the directory to use for the process
-
-  Returns:
-    the size of the new APK gzipped
-
-  Raises:
-    Exception: if there is a problem calling the binaries needed in the process
-  """
-
-  # Checks that the OS binaries needed are available
-  find_bins_or_die()
-  # Clean temp files
-  if os.path.exists(temp_path + '.gz'): os.remove(temp_path + '.gz')
-
-  # gzip new APK and get its size
-  gzipped_new_file = open(temp_path, 'w')
-  p = subprocess.Popen(
-      [gzip_path, '--keep', '-c', '-9', new_file],
-      shell=False, stdout=gzipped_new_file)
-  ret_code = p.wait()
-  if ret_code != 0: raise Exception(
-      'Problem gzipping the new APK, returned code: %s' % ret_code)
-  gzipped_new_file.flush()
-  gzipped_new_file.close()
-  gzipped_size = os.stat(temp_path).st_size
-  # Clean up
-  if os.path.exists(temp_path + '.gz'): os.remove(temp_path + '.gz')
-  return gzipped_size
-
-
-def calculate_filebyfile(old_file, new_file, save_patch_path, temp_path):
-  """Estimates the size the File-by-File patch gzipped.
+def filebyfile(old_file, new_file, temp_path):
+  """File-by-file diffing.
 
   Args:
     old_file: the old APK file
@@ -242,43 +205,73 @@ def calculate_filebyfile(old_file, new_file, save_patch_path, temp_path):
     Exception: if there is a problem calling the binaries needed in the process
   """
 
-  # Checks that the OS binaries needed are available
-  find_bins_or_die()
-  # Clean temp files
-  if os.path.exists(temp_path): os.remove(temp_path)
-
-  if save_patch_path:
-    filebyfile_patch_path = save_patch_path + '-file-by-file-patch'
-  else:
-    filebyfile_patch_path = temp_path + '.filebyfile'
-  gzipped_filebyfile_patch_path = filebyfile_patch_path + '.gz'
-  if os.path.exists(gzipped_filebyfile_patch_path):
-    os.remove(gzipped_filebyfile_patch_path)
+  filebyfile_patch_path = os.path.join(temp_path, '.filebyfile')
+  cleanup(filebyfile_patch_path)
 
   # file by file patch
   # We use a jar from https://github.com/andrewhayden/archive-patcher
-  if os.path.exists(filebyfile_patch_path): os.remove(filebyfile_patch_path)
-  p = subprocess.Popen(
-      [java_path, '-jar', dir_path + '/lib/file-by-file-tools.jar', '--generate',
-       '--old', old_file, '--new', new_file, '--patch', filebyfile_patch_path],
-      shell=False)
-  ret_code = p.wait()
-  if ret_code != 0: raise Exception(
-      'Problem creating file by file patch, returned code: %s' % ret_code)
+  run_command(
+      [java_path, '-jar', dir_path + '/lib/file-by-file-tools.jar',
+       '--generate',
+       '--old', old_file, '--new', new_file, '--patch', filebyfile_patch_path])
+  return filebyfile_patch_path
 
-  # gzip file by file patch and get its size
-  subprocess.check_output([gzip_path, '-9', filebyfile_patch_path])
-  gzipped_filebyfile_patch_size = os.stat(gzipped_filebyfile_patch_path).st_size
-  # Clean temp files
-  if os.path.exists(temp_path): os.remove(temp_path)
-  if not save_patch_path and os.path.exists(gzipped_filebyfile_patch_path):
-    os.remove(gzipped_filebyfile_patch_path)
-  return gzipped_filebyfile_patch_size
+
+def gzip(patch_path):
+  """Gzips the file on patch_path.
+
+  Args:
+    patch_path: path to the input file
+
+  Returns:
+    path to the gzipped input file
+  """
+  check_exists(patch_path)
+  in_file = open(patch_path, 'r')
+
+  gzipped_path = patch_path + ".gz"
+  out_file = open(gzipped_path, 'w')
+  run_command([gzip_path, '-9'], stdin=in_file, stdout=out_file)
+  in_file.close()
+  out_file.close()
+  return gzipped_path
+
+
+def brotli(patch_path):
+  """Compresses the given file using BROTLI"""
+  check_exists(patch_path)
+  run_command([brotli_path, '-9', patch_path])
+  return patch_path + ".br"
+
+
+def get_size(file):
+  """Gets the size of the file."""
+  check_exists(file)
+  size = os.stat(file).st_size
+  return size
+
+
+def no_diff(old_file, new_file, temp_path):
+  """No-op diffing algorithm that just returns a copy of the new file."""
+  check_exists(new_file)
+  new_file_copy = os.path.join(temp_path, "new_apk.diff")
+  run_command(["cp", new_file, new_file_copy])
+  check_exists(new_file_copy)
+  return new_file_copy
+
+
+def no_compress(file):
+  """No-op compression algorithm that returns a copy of input file."""
+  check_exists(file)
+  new_file = file + ".copy"
+  run_command(["cp", file, new_file])
+  return new_file
 
 
 def main():
   locale.setlocale(locale.LC_ALL, '')
 
+  # Parse arguments
   parser = argparse.ArgumentParser(
       description='Estimate the sizes of APK patches for Google Play')
   parser.add_argument(
@@ -298,10 +291,8 @@ def main():
     parser.exit()
   args = parser.parse_args()
 
-  if not os.path.isfile(args.old_file):
-    raise Exception('File does not exist: %s' % args.old_file)
-  if not os.path.isfile(args.new_file):
-    raise Exception('File does not exist: %s' % args.new_file)
+  # Validate arguments
+  check_exists(args.old_file, args.new_file)
   if args.save_patch and not os.access(
       os.path.dirname(os.path.abspath(args.save_patch)), os.W_OK):
     raise Exception('The save patch path is not writable: %s' % args.save_patch)
@@ -311,39 +302,42 @@ def main():
   save_patch_path = args.save_patch
   if not os.path.isdir(args.temp_dir):
     raise Exception('Temp directory does not exist: %s' % args.temp_dir)
-  temp_path = args.temp_dir + '/patch.tmp'
+  temp_path = args.temp_dir
 
-  new_file_size = os.stat(args.new_file).st_size
+  # Checks that the OS binaries needed are available
+  find_bins_or_die()
 
-  bsdiff_size = calculate_bsdiff(
-      args.old_file, args.new_file, save_patch_path, temp_path)
+  # Diff and compression modes
+  diffs = {"None": no_diff, "BSDIFF": bsdiff, "File-By-File": filebyfile}
+  compressions = {"None": no_compress, "GZIP": gzip, "BROTLI": brotli}
+  diff_extension = {"None": "", "BSDIFF": ".bsdiff", "File-By-File": ".fbf"}
+  compression_extension = {"None": "", "GZIP": ".gz", "BROTLI": ".br"}
+  diff_name_in_order = ["None", "BSDIFF", "File-By-File"]
+  compression_name_in_order = ["None", "GZIP", "BROTLI"]
+  column_width = 15
 
-  gzipped_size = calculate_new_apk(args.new_file, temp_path)
+  print(
+    "".join([x.ljust(column_width) for x in [""] + compression_name_in_order]))
 
-  # Calculate the size of the File-by-File patch gzipped
-  gzipped_filebyfile_patch_size = calculate_filebyfile(
-      args.old_file, args.new_file, save_patch_path, temp_path)
+  for diff_name in diff_name_in_order:
+    diff = diffs[diff_name]
+    row = diff_name.ljust(column_width)
+    delta_path = diff(args.old_file, args.new_file, temp_path)
+    for compression_name in compression_name_in_order:
+      compress = compressions[compression_name]
+      compressed_path = compress(delta_path)
+      patch_size = get_size(compressed_path)
+      row += human_file_size(patch_size).ljust(column_width)
 
-  print ('\nNew APK size on disk: %s bytes [%s]'
-         % (locale.format('%d', new_file_size, grouping=True),
-            human_file_size(new_file_size)))
-
-  print '\nEstimated download size for new installs:'
-  print ('   Full new APK (gzipped) size:'
-         ' %s bytes [%s]'
-         % (locale.format('%d', gzipped_size, grouping=True),
-            human_file_size(gzipped_size)))
-
-  print '\nEstimated download size for updates from the old APK, using Bsdiff:'
-  print ('   Bsdiff patch (gzipped) size: %s bytes [%s]'
-         % (locale.format('%d', bsdiff_size, grouping=True),
-            human_file_size(bsdiff_size)))
-
-  print '\nEstimated download size for updates from the old APK,'
-  print ' using File-by-File:'
-  print ('   File-by-File patch (gzipped) size: %s bytes [%s]\n'
-         % (locale.format('%d', gzipped_filebyfile_patch_size, grouping=True),
-            human_file_size(gzipped_filebyfile_patch_size)))
+      # no point copying if we are not doing diffing or patching
+      if save_patch_path and not (
+          diff_name == "None" and compression_name == "None"):
+        run_command(["cp", compressed_path,
+                     save_patch_path + diff_extension[diff_name] +
+                     compression_extension[compression_name]])
+      cleanup(compressed_path)
+    cleanup(delta_path)
+    print row
 
 
 if __name__ == '__main__':

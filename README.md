@@ -20,17 +20,10 @@ $ python apk_patch_size_estimator.py --old-file old.apk --new-file new.apk
 
 #### Output:
 ```bash
-New APK size on disk: 18,271,850 bytes [17.4MB]
-
-Estimated download size for new installs:
-   Full new APK (gzipped) size: 16,339,603 bytes [15.6MB]
-
-Estimated download size for updates from the old APK, using Bsdiff:
-   Bsdiff patch (gzipped) size: 2,989,691 bytes [2.85MB]
-
-Estimated download size for updates from the old APK,
- using File-by-File:
-   File-by-File patch (gzipped) size: 1,912,751 bytes [1.82MB]
+               None           GZIP           BROTLI
+None           6.54MB         6.54MB         6.54MB
+BSDIFF         6.54MB         2.12MB         2.12MB
+File-By-File   6.54MB         2.12MB         2.12MB
 ```
 
 ## Patches estimation process
@@ -39,21 +32,21 @@ Estimated download size for updates from the old APK,
 ![](images/apk_patch_size_estimator.png) 
 
 ### File-by-file estimation
-Please visit https://github.com/andrewhayden/archive-patcher for further details.
+Please visit https://github.com/google/archive-patcher for further details.
 
 ## Installing external dependencies
-The script uses *bsdiff*, *gzip*, *head*, *tail*, *bunzip2* and *java* binaries, [**bsdiff**](https://www.freebsd.org/cgi/man.cgi?query=bsdiff) is the only one not installed by defult in a unix based OS.
+The script uses *bsdiff*, *gzip*, *brotli*, *head*, *tail*, *bunzip2* and *java* binaries, [**bsdiff**](https://www.freebsd.org/cgi/man.cgi?query=bsdiff) and [**brotli**](https://github.com/google/brotli) are the only ones not installed by defult in a unix based OS.
 
 #### Linux debian-based
 Install bsdiff:
 ```bash
-sudo apt-get install bsdiff
+sudo apt-get install bsdiff brotli
 ```
 
 #### OS X
 Install bsdiff using [Homebrew](http://brew.sh/):
 ```bash
-brew install bsdiff
+brew install bsdiff brotli
 ```
 
 #### Windows
@@ -75,3 +68,4 @@ python -m unittest discover tests/
 ## Authors
     Julian Toledo
     Andrew Hayden
+    Song Pan
